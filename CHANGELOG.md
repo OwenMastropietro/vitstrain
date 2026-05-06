@@ -2,6 +2,43 @@
 
 
 
+## v0.7.2 (2026-05-06)
+
+### Documentation
+
+* docs: updated README.md with latest arguments ([`f257372`](https://github.com/mbari-org/vitstrain/commit/f2573721107023da5de8cbb9de907752f1f9418e))
+
+### Fix
+
+* fix(training): avoid meta-tensor load error and persist split path
+
+- remove `device_map=&#34;auto&#34;` from `AutoModelForImageClassification.from_pretrained`
+  so Trainer handles device placement during training and avoids meta tensor dispatch issues
+- define and log `split_json_path` in `main()`
+- pass `split_json_path` into `create_dataset(...)` to persist split metadata ([`698f037`](https://github.com/mbari-org/vitstrain/commit/698f0374b45304d414bbbec58e468aa0200be2b6))
+
+### Unknown
+
+* feat/minclasstail Merge pull request #13 from mbari-org/feat/minclasstail
+
+Adds --min-images-per-class to use with --remove-long-tail, e.g. 
+
+python src/fine_tune_vits.py \
+        --early-stopping-epochs 5 \
+        --model-name mbari-m3-vits-b8 \
+        --base-model facebook/dino-vitb8 \
+        --remap train_class_reduction.json \
+        --add-rotations True \
+        --remove-long-tail True \
+        --num-epochs 30 \
+        --min-images-per-class 100 \
+        --raw-data /mnt/DeepSea-AI/data/M3/crops/ \
+        --filter-data /mnt/ML_SCRATCH/M3_filtered_crops \
+        --exclude-labels &#34;marine snow&#34; &#34;marine organism&#34; ([`7830a60`](https://github.com/mbari-org/vitstrain/commit/7830a607516ca8150798a12f129a75ed1ae425d6))
+
+* added --min-images-per-class to use with --remove-long-tail ([`c6ec3ac`](https://github.com/mbari-org/vitstrain/commit/c6ec3ac3d850555b9e53a02d8c4804921781ccd4))
+
+
 ## v0.7.1 (2025-12-13)
 
 ### Fix

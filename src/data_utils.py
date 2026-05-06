@@ -13,9 +13,8 @@ import torch
 from typing import List, Dict
 from datasets import load_dataset, DatasetDict
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import label_binarize
-import matplotlib.pyplot as plt
-import pandas as pd
+from datetime import datetime
+from typing import Optional
 
 
 def collate_fn(examples):
@@ -55,7 +54,7 @@ def compute_mean_std(dataset):
 
 def create_dataset(logger: Logger, remove_long_tail: bool, raw_dataset_paths: List[Path], train_dataset_root: Path,
                    remap_class: Dict[str, str] = None, exclude_labels: List[str] = None,
-                   min_images_per_class: int = 10):
+                   min_images_per_class: int = 10, split_json_path: Optional[Path] = None):
     if train_dataset_root.exists():
         logger.info(f"Removing existing dataset at {train_dataset_root}")
         shutil.rmtree(train_dataset_root)
@@ -174,13 +173,45 @@ def create_dataset(logger: Logger, remove_long_tail: bool, raw_dataset_paths: Li
     X_train, X_test_val, y_train, y_test_val = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
 
     # Split the 20% test + valid in half test, half valid
-    X_val, X_test, y_val, y_test = train_test_split(X_test_val, y_test_val, test_size=0.5, random_state=42,
-                                                    stratify=y_test_val)
+    X_val, X_test, y_val, y_test = train_test_split(
+        X_test_val, y_test_val, test_size=0.5, random_state=42, stratify=y_test_val
+    )
+
+    train_indices = list(map(int, X_train.index.tolist()))
+    val_indices = list(map(int, X_val.index.tolist()))
+    test_indices = list(map(int, X_test.index.tolist()))
+
+    if split_json_path is not None:
+        split_json_path.parent.mkdir(parents=True, exist_ok=True)
+        split_payload = {
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "dataset_root": train_dataset_root.as_posix(),
+            "splitting": {
+                "method": "sklearn.model_selection.train_test_split",
+                "random_state": 42,
+                "test_size_total": 0.2,
+                "val_fraction_of_test_val": 0.5,
+                "stratify": True,
+            },
+            "counts": {
+                "train": len(train_indices),
+                "valid": len(val_indices),
+                "test": len(test_indices),
+            },
+            "indices": {
+                "train": train_indices,
+                "valid": val_indices,
+                "test": test_indices,
+            },
+        }
+        logger.info(f"Saving (overwriting) persisted split to {split_json_path}")
+        with split_json_path.open("w") as f:
+            json.dump(split_payload, f, indent=2, sort_keys=True)
 
     ds_splits = DatasetDict({
-        'train': ds['train'].select(X_train.index),
-        'valid': ds['train'].select(X_val.index),
-        'test': ds['train'].select(X_test.index)
+        'train': ds['train'].select(train_indices),
+        'valid': ds['train'].select(val_indices),
+        'test': ds['train'].select(test_indices)
     })
 
     # Create label mappings, id2label and label2id from the dataset

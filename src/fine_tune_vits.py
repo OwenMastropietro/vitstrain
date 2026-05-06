@@ -104,6 +104,9 @@ def main():
     now = datetime.now()
     model_name = f"{model_name}-{now:%Y%m%d}"
 
+    # Persist the dataset split using the same dated naming convention as the model
+    split_json_path = filter_data / "split.json"
+
     # Define loss history file
     loss_history_file = f"loss_history_{model_name}.json"
 
@@ -119,6 +122,7 @@ def main():
     logger.info(f"Raw data paths: {[p.as_posix() for p in raw_data]}")
     logger.info(f"Excluded labels: {exclude_labels}")
     logger.info(f"Filtered data path: {filter_data}")
+    logger.info(f"Split JSON path: {split_json_path}")
     logger.info(f"Remap classes: {remap}")
     logger.info(f"Loss history file: {loss_history_file}")
     logger.info("==========================================================================")
@@ -131,14 +135,22 @@ def main():
             remap = json.load(f)
 
     # Create the dataset from the raw dataset(s)
-    ds_splits, id2label, label2id, image_mean, image_std = create_dataset(logger, remove_long_tail, raw_data, filter_data, remap, exclude_labels, min_images_per_class)
+    ds_splits, id2label, label2id, image_mean, image_std = create_dataset(
+        logger,
+        remove_long_tail,
+        raw_data,
+        filter_data,
+        remap,
+        exclude_labels,
+        min_images_per_class,
+        split_json_path=split_json_path,
+    )
 
     # The id2label and label2id are used to convert the labels to and from the model's internal representation
     # These are stored in the HuggingFace config.json file with the model, e.g. mbari-uav-vit-b-16/config.json
     model = AutoModelForImageClassification.from_pretrained(base_model,
                                                              num_labels=len(label2id.keys()),
                                                              id2label=id2label,
-                                                             device_map="auto",
                                                              label2id=label2id,
                                                              ignore_mismatched_sizes=True,
                                                              )

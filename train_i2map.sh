@@ -1,14 +1,15 @@
 #!/bin/bash
 
-rm *.json
-
 python src/fine_tune_vits.py \
-	--early-stopping-epochs 5 \
+	--early-stopping-epochs 3 \
 	--model-name mbari-i2map-vits-b8 \
 	--base-model facebook/dino-vitb8 \
 	--num-epochs 50 --add-rotations True \
-	--raw-data /mnt/DeepSea-AI/scratch/i2mapbulk/Baseline_mbari-i2map-vits-b8-20251008-vss/crops/  \
-	--filter-data /mnt/ML_SCRATCH/data/i2map_filter
+	--exclude-labels "marine snow" "marine organism" "cra" "Unknown" \
+	--raw-data \
+	/mnt/ML_SCRATCH/i2map/Baseline/crops \
+	/mnt/ML_SCRATCH/i2mapbulk/crops/ \
+	--filter-data /mnt/ML_SCRATCH/i2map_filter
 
 exit
 python src/fine_tune_vits.py \

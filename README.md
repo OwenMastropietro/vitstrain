@@ -71,6 +71,19 @@ python src/fine_tune_vits.py \
         --num-epochs 5
 ```
 
+To skip data preparation and train from an existing prepared dataset, use `--train-only`:
+
+```bash
+python src/fine_tune_vits.py \
+        --train-only \
+        --filter-data $PWD/data/data_filter \
+        --base-model google/vit-base-patch16-224-in21k \
+        --model-name catsdogs-vit-b16 \
+        --num-epochs 5
+```
+
+`--filter-data` must point to a previously prepared dataset directory.
+
 Example output:
 ```text
 catsdogs-vit-b16-20250828

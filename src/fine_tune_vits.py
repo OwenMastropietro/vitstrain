@@ -18,7 +18,7 @@ from transformers import TrainingArguments, Trainer, AutoImageProcessor
 from transformers import AutoModel, AutoModelForImageClassification, TrainerCallback, EarlyStoppingCallback
 from sklearn.metrics import confusion_matrix
 from args import parse_args
-from data_utils import collate_fn, create_dataset
+from data_utils import collate_fn, create_dataset, load_prepared_dataset
 from plot_utils import plot_multiclass_pr_curves
 from version import __version__
 import matplotlib.pyplot as plt
@@ -88,6 +88,7 @@ def main():
     args = parse_args()
 
     # Command-line argument values
+    train_only = getattr(args, "train_only", False)
     remove_long_tail = args.remove_long_tail
     add_rotations = args.add_rotations
     model_name = args.model_name
@@ -124,6 +125,7 @@ def main():
     logger.info(f"Filtered data path: {filter_data}")
     logger.info(f"Split JSON path: {split_json_path}")
     logger.info(f"Remap classes: {remap}")
+    logger.info(f"Train only (skip data prep): {train_only}")
     logger.info(f"Loss history file: {loss_history_file}")
     logger.info("==========================================================================")
     logger.info(f"Remove the loss history file and filtered data path if you want to restart training, e.g. rm {loss_history_file} && rm -rf {filter_data}")
@@ -134,17 +136,25 @@ def main():
         with open(remap) as f:
             remap = json.load(f)
 
-    # Create the dataset from the raw dataset(s)
-    ds_splits, id2label, label2id, image_mean, image_std = create_dataset(
-        logger,
-        remove_long_tail,
-        raw_data,
-        filter_data,
-        remap,
-        exclude_labels,
-        min_images_per_class,
-        split_json_path=split_json_path,
-    )
+    if train_only:
+        # Load the already-prepared dataset in filter_data and reuse split.json if possible.
+        ds_splits, id2label, label2id, image_mean, image_std = load_prepared_dataset(
+            logger,
+            filter_data,
+            split_json_path=split_json_path,
+        )
+    else:
+        # Create the dataset from the raw dataset(s)
+        ds_splits, id2label, label2id, image_mean, image_std = create_dataset(
+            logger,
+            remove_long_tail,
+            raw_data,
+            filter_data,
+            remap,
+            exclude_labels,
+            min_images_per_class,
+            split_json_path=split_json_path,
+        )
 
     # The id2label and label2id are used to convert the labels to and from the model's internal representation
     # These are stored in the HuggingFace config.json file with the model, e.g. mbari-uav-vit-b-16/config.json

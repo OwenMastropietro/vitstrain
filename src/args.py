@@ -10,6 +10,11 @@ DATA_PATH = Path(__file__).parent.parent / "data"
 def parse_args():
     parser = argparse.ArgumentParser(description="Train an image classification Vision Transformer (ViTS) model.")
     parser.add_argument(
+        "--train-only",
+        action="store_true",
+        help="Skip data copy/filtering and train using the existing prepared dataset in --filter-data (and split.json if present).",
+    )
+    parser.add_argument(
         "--remove-long-tail",
         type=bool,
         default=False,

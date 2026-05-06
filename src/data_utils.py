@@ -261,3 +261,107 @@ def create_dataset(logger: Logger, remove_long_tail: bool, raw_dataset_paths: Li
 
     return ds_splits, id2label, label2id, mean, std
 
+
+def load_prepared_dataset(
+    logger: Logger,
+    train_dataset_root: Path,
+    *,
+    split_json_path: Optional[Path] = None,
+) -> tuple[DatasetDict, Dict[int, str], Dict[str, int], List[float], List[float]]:
+    """
+    Load an already-prepared imagefolder dataset rooted at train_dataset_root.
+
+    If split_json_path exists and contains the persisted file lists, the same split is reloaded.
+    Otherwise, a new stratified split is computed from the currently-present files.
+    """
+    if not train_dataset_root.exists():
+        raise FileNotFoundError(
+            f"Prepared dataset root {train_dataset_root} does not exist. "
+            f"Either run without --train-only to build it, or point --filter-data to an existing prepared dataset."
+        )
+
+    stats_path = train_dataset_root / "stats.json"
+    if not stats_path.exists():
+        raise FileNotFoundError(
+            f"Prepared dataset is missing {stats_path}. "
+            f"Expected a directory created by the data prep step."
+        )
+
+    logger.info(f"Loading prepared dataset {train_dataset_root}...")
+    ds = load_dataset(train_dataset_root.as_posix())
+    df_train = ds["train"].to_pandas()
+
+    # Build stable relpaths for index mapping
+    index_to_file = {
+        int(idx): _image_value_to_relpath(df_train.at[idx, "image"], train_dataset_root)
+        for idx in df_train.index.tolist()
+    }
+    file_to_index: Dict[str, int] = {rel: idx for idx, rel in index_to_file.items()}
+
+    train_indices: list[int]
+    val_indices: list[int]
+    test_indices: list[int]
+
+    used_persisted_split = False
+    if split_json_path is not None and split_json_path.exists():
+        try:
+            with split_json_path.open() as f:
+                payload = json.load(f)
+            files = payload.get("files") or {}
+            train_files = files.get("train") or []
+            val_files = files.get("valid") or []
+            test_files = files.get("test") or []
+
+            train_indices = [file_to_index[p] for p in train_files if p in file_to_index]
+            val_indices = [file_to_index[p] for p in val_files if p in file_to_index]
+            test_indices = [file_to_index[p] for p in test_files if p in file_to_index]
+
+            if train_indices and val_indices and test_indices:
+                used_persisted_split = True
+                logger.info(f"Reusing persisted split from {split_json_path}")
+            else:
+                logger.warning(
+                    f"Persisted split at {split_json_path} did not match current files; recomputing split."
+                )
+        except Exception as e:
+            logger.warning(f"Failed to load persisted split from {split_json_path}: {e}. Recomputing split.")
+
+    if not used_persisted_split:
+        logger.info("Computing new stratified train/valid/test split from prepared dataset files")
+        X = df_train["image"]
+        y = df_train["label"]
+        X_train, X_test_val, y_train, y_test_val = train_test_split(
+            X, y, test_size=0.2, random_state=42, stratify=y
+        )
+        X_val, X_test, y_val, y_test = train_test_split(
+            X_test_val, y_test_val, test_size=0.5, random_state=42, stratify=y_test_val
+        )
+        train_indices = list(map(int, X_train.index.tolist()))
+        val_indices = list(map(int, X_val.index.tolist()))
+        test_indices = list(map(int, X_test.index.tolist()))
+
+    ds_splits = DatasetDict(
+        {
+            "train": ds["train"].select(train_indices),
+            "valid": ds["train"].select(val_indices),
+            "test": ds["train"].select(test_indices),
+        }
+    )
+
+    with stats_path.open() as f:
+        combined_stats = json.load(f)
+
+    logger.info("Creating label maps and computing statistics")
+    id2label = {id: label for id, label in enumerate(sorted(combined_stats.keys()))}
+    label2id = {label: id for id, label in id2label.items()}
+
+    mean, std = compute_mean_std(ds_splits["train"])
+
+    logger.info(f"Number of training samples: {len(ds_splits['train'])}")
+    logger.info(f"Number of validation samples: {len(ds_splits['valid'])}")
+    logger.info(f"Number of test samples: {len(ds_splits['test'])}")
+    logger.info(f"Mean: {mean}")
+    logger.info(f"Std: {std}")
+
+    return ds_splits, id2label, label2id, mean, std
+

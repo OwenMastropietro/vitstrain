@@ -2,6 +2,17 @@
 
 
 
+## v0.8.0 (2026-05-06)
+
+### Build
+
+* build: pin conda build ([`3ee6953`](https://github.com/mbari-org/vitstrain/commit/3ee6953782a3f00e9629f39fa4b94631245d6e24))
+
+### Feature
+
+* feat: add --train-only option to skip data preparation and train from existing prepared dataset ([`5c4fb56`](https://github.com/mbari-org/vitstrain/commit/5c4fb566276e9c0fa195a89e3e67ba6ace8f0b68))
+
+
 ## v0.7.2 (2026-05-06)
 
 ### Documentation

@@ -2,6 +2,7 @@ name: vitstrain
 channels:
   - conda-forge
 dependencies:
-  - python >=3.9,<3.12
+  - python ==3.11
+  - pip>=25.3
   - pip:
     - -r requirements.txt

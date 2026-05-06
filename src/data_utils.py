@@ -17,6 +17,27 @@ from datetime import datetime
 from typing import Optional
 
 
+def _image_value_to_relpath(image_value, dataset_root: Path) -> str:
+    """Extract a stable dataset-root-relative file path from an image column value."""
+    image_path = None
+    if isinstance(image_value, dict):
+        image_path = image_value.get("path")
+    elif isinstance(image_value, (str, Path)):
+        image_path = image_value
+    elif hasattr(image_value, "filename"):
+        image_path = getattr(image_value, "filename")
+
+    if not image_path:
+        return str(image_value)
+
+    image_path = Path(image_path)
+    try:
+        return image_path.resolve().relative_to(dataset_root.resolve()).as_posix()
+    except Exception:
+        # Fall back to class/file style when an absolute root-relative path is unavailable.
+        return image_path.as_posix()
+
+
 def collate_fn(examples):
     pixel_values = torch.stack([example["pixel_values"] for example in examples])
     labels = torch.tensor([example["label"] for example in examples])
@@ -181,6 +202,14 @@ def create_dataset(logger: Logger, remove_long_tail: bool, raw_dataset_paths: Li
     val_indices = list(map(int, X_val.index.tolist()))
     test_indices = list(map(int, X_test.index.tolist()))
 
+    index_to_file = {
+        int(idx): _image_value_to_relpath(df_train.at[idx, "image"], train_dataset_root)
+        for idx in df_train.index.tolist()
+    }
+    train_files = [index_to_file[idx] for idx in train_indices]
+    val_files = [index_to_file[idx] for idx in val_indices]
+    test_files = [index_to_file[idx] for idx in test_indices]
+
     if split_json_path is not None:
         split_json_path.parent.mkdir(parents=True, exist_ok=True)
         split_payload = {
@@ -198,10 +227,10 @@ def create_dataset(logger: Logger, remove_long_tail: bool, raw_dataset_paths: Li
                 "valid": len(val_indices),
                 "test": len(test_indices),
             },
-            "indices": {
-                "train": train_indices,
-                "valid": val_indices,
-                "test": test_indices,
+            "files": {
+                "train": train_files,
+                "valid": val_files,
+                "test": test_files,
             },
         }
         logger.info(f"Saving (overwriting) persisted split to {split_json_path}")

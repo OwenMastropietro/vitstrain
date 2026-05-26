@@ -2,6 +2,67 @@
 
 
 
+## v0.9.0 (2026-05-26)
+
+### Feature
+
+* feat: merge pull request #14 from OwenMastropietro/feat/per-class-metrics
+
+## Summary
+
+Closes #3
+
+Adds per-class evaluation metrics reporting after test inference.
+
+New metrics include:
+- precision
+- recall
+- standard multiclass F1-score
+- support
+- threshold-optimized one-vs-rest F1-score
+- optimal confidence threshold
+
+Metrics are saved to `per_class_metrics.csv`.
+
+This preserves the existing `find_optimal_thresholds()` behavior while extending reporting with standard multiclass metrics from `classification_report()`.
+
+`compute_per_class_metrics()` now encapsulates the functionality currently provided by `find_optimal_thresholds()` while extending it with additional per-class evaluation metrics.
+
+As a result, `per_class_metrics.csv` can replace `optimal_thresholds_{...}.csv` in the future.
+
+The existing `find_optimal_thresholds()` implementation and `optimal_thresholds_{...}.csv` output are preserved for backward compatibility, as downstream dependencies are currently unknown.
+
+For example,
+
+&gt; `per_class_metrics.csv`
+
+| class_name | class_id | precision          | recall | f1_score          | support | optimal_threshold | threshold_f1 |
+|-------------|-----------|--------------------|--------|-------------------|---------|-------------------|--------------|
+| cats        | 0         | 0.9611650485436893 | 0.99   | 0.9753694581280788 | 100     | 0.6000000000000002 | 0.99         |
+| dogs        | 1         | 0.9896907216494846 | 0.96   | 0.9746192893401016 | 100     | 0.3500000000000001 | 0.99         |
+
+&gt; `optimal_thresholds_smoke-test-20260524_20260524_235922.csv`
+
+| class_name | class_id | f1_score | support | threshold          |
+|-------------|-----------|----------|---------|--------------------|
+| cats        | 0         | 0.99     | 100     | 0.6000000000000002 |
+| dogs        | 1         | 0.99     | 100     | 0.3500000000000001 |
+
+## Testing
+
+Validated locally using the included cats/dogs dataset:
+
+```sh
+python src/fine_tune_vits.py \
+    --raw-data $PWD/data/crops \
+    --base-model google/vit-base-patch16-224 \
+    --model-name smoke-test \
+    --num-epochs 1
+``` ([`b1854a0`](https://github.com/mbari-org/vitstrain/commit/b1854a03318f13093d4f9f2903bc6ca626f7dd38))
+
+* feat: add per-class evaluation matrics reporting (#3) ([`a2ac2f1`](https://github.com/mbari-org/vitstrain/commit/a2ac2f19ac87d5164ab3fb9e79bd9f891def5e18))
+
+
 ## v0.8.0 (2026-05-06)
 
 ### Build

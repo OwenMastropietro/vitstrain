@@ -8,7 +8,7 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import json
 import csv
-from sklearn.metrics import accuracy_score, balanced_accuracy_score, precision_score, recall_score, f1_score
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, precision_score, recall_score, f1_score, classification_report
 import seaborn as sns
 import numpy as np
 import torch
@@ -29,6 +29,78 @@ formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
 console = logging.StreamHandler()
 logger.addHandler(console)
 logger.setLevel(logging.DEBUG)
+
+def compute_per_class_metrics(y_true, y_pred, y_prob, class_names, thresholds=np.arange(0.1, 0.9, 0.05)):
+    """
+    Computes per-class evaluation metrics and optimal thresholds.
+
+    Combines:
+    - standard multiclass classification metrics
+    - one-vs-rest threshold optimization metrics
+
+    Args:
+        y_true(numpy array): True labels.
+        y_pred(numpy array): Predicted labels.
+        y_prob(numpy array): Predicted probabilities for each class.
+
+    Returns:
+        list[dict]: Per-class evaluation metrics.
+    """
+
+    # Standard Multiclass Metrics.
+    report = classification_report(
+        y_true,
+        y_pred,
+        target_names=class_names,
+        output_dict=True,
+        zero_division=0,
+    )
+
+    per_class_metrics = []
+
+    for class_idx, class_name in enumerate(class_names):
+        class_metrics = report[class_name]
+
+        # Standard Multiclass Metrics.
+        precision = float(class_metrics["precision"])
+        recall    = float(class_metrics["recall"])
+        f1        = float(class_metrics["f1-score"])
+        support   = int(class_metrics["support"])
+
+        # Optimal Threshold Metrics (one-vs-rest / one-vs-all).
+        y_true_binary = (y_true == class_idx).astype(int)
+        y_prob_binary = y_prob[:, class_idx]
+
+        best_threshold = 0.5
+        best_threshold_f1 = 0.0
+
+        for threshold in thresholds:
+            y_pred_binary = (y_prob_binary >= threshold).astype(int)
+
+            threshold_f1 = f1_score(y_true_binary, y_pred_binary, zero_division=0)
+
+            if threshold_f1 > best_threshold_f1:
+                best_threshold_f1 = threshold_f1
+                best_threshold = threshold
+
+        metrics = {
+            "class_name":         class_name,
+            "class_id":           class_idx,
+
+            # standard multiclass metrics
+            "precision":          precision,
+            "recall":             recall,
+            "f1_score":           f1,
+            "support":            support,
+
+            # threshold optimized metrics
+            "optimal_threshold": float(best_threshold),
+            "threshold_f1":      float(best_threshold_f1),
+        }
+
+        per_class_metrics.append(metrics)
+
+    return per_class_metrics
 
 
 def find_optimal_thresholds(y_true, y_prob, class_names, thresholds=np.arange(0.1, 0.9, 0.05)):
@@ -345,34 +417,56 @@ def main():
     trainer.save_model(model_name)
 
     # Run predictions on the test and val datasets
-    outputs = trainer.predict(test_ds)
-
     metrics = trainer.evaluate(val_ds)
     trainer.log_metrics("eval", metrics)
     trainer.save_metrics("eval", metrics)
 
-    # Output other metrics
+    outputs = trainer.predict(test_ds)
     y_true = outputs.label_ids
     y_pred = outputs.predictions.argmax(1)
     y_prob = torch.nn.functional.softmax(torch.tensor(outputs.predictions), dim=-1).numpy()
 
+    # Compute Global Metrics.
     accuracy = balanced_accuracy_score(y_true, y_pred)
     precision = precision_score(y_true, y_pred, average='micro')
     recall = recall_score(y_true, y_pred, average='micro')
-    logger.info(f"Accuracy: {accuracy:.2f}, Precision: {precision:.2f}, Recall: {recall:.2f}")
 
-    # Find optimal thresholds per class using F1 maximization
+    # Compute Per-Class Metrics.
     class_names = list(id2label.values())
-    optimal_thresholds = find_optimal_thresholds(y_true, y_prob, class_names)
+    per_class_metrics = compute_per_class_metrics(y_true, y_pred, y_prob, class_names)
+    optimal_thresholds = find_optimal_thresholds(y_true, y_prob, class_names)  # todo: redundant
 
-    # Save optimal thresholds to CSV
+    # Log Metrics.
+    logger.info(
+        f"Accuracy: {accuracy:.2f}, "
+        f"Precision: {precision:.2f}, "
+        f"Recall: {recall:.2f}"
+    )
+    for m in per_class_metrics:
+        logger.info(
+            f"Class \'{m['class_name']}\' (ID: {m['class_id']}): "
+            f"Precision={m['precision']:.3f}, "
+            f"Recall={m['recall']:.3f}, "
+            f"F1={m['f1_score']:.3f}, "
+            f"Support={m['support']}, "
+            f"Optimal Threshold={m['optimal_threshold']:.3f}, "
+            f"Threshold F1={m['threshold_f1']:.3f}"
+        )
+
+    # Save Metrics.
+    pcm_path = Path(model_name) / "per_class_metrics.csv"
+    with open(pcm_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(per_class_metrics[0]))
+        writer.writeheader()
+        writer.writerows(per_class_metrics)
+    logger.info(f"Per-class metrics saved to {pcm_path}")
+
     csv_filename = Path(model_name) / f"optimal_thresholds_{model_name}_{datetime.now():%Y%m%d_%H%M%S}.csv"
     with open(csv_filename, 'w', newline='') as csvfile:
         fieldnames = ['class_name', 'class_id', 'f1_score', 'support', 'threshold']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(optimal_thresholds)
-
     logger.info(f"Optimal thresholds saved to {csv_filename}")
 
     all_labels = id2label.values()

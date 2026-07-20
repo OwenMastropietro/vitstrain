@@ -35,11 +35,11 @@ logger.setLevel(logging.DEBUG)
 class BackboneClassifier(nn.Module):
     """Wraps a backbone-only vision model with a linear classification head."""
 
-    def __init__(self, backbone, num_classes, dropout=0.1):
+    def __init__(self, backbone, hidden_size, num_classes, dropout=0.1):
         super().__init__()
         self.backbone = backbone
         self.dropout = nn.Dropout(dropout)
-        self.classifier = nn.LazyLinear(num_classes)
+        self.classifier = nn.Linear(hidden_size, num_classes)
 
     def forward(self, pixel_values, labels=None):
         outputs = self.backbone(pixel_values=pixel_values)
@@ -97,7 +97,8 @@ def create_model(model_name, id2label, freeze_backbone=False):
         logger.info(f"Falling back to backbone model: {e}")
 
     backbone = AutoModel.from_pretrained(model_name)
-    model = BackboneClassifier(backbone, num_classes)
+    hidden_size = get_hidden_size(backbone)
+    model = BackboneClassifier(backbone, hidden_size, num_classes)
 
     if freeze_backbone:
         model.freeze_backbone()
@@ -230,8 +231,41 @@ def find_optimal_thresholds(y_true, y_prob, class_names, thresholds=np.arange(0.
 
     return optimal_thresholds
 
-def get_input_size(processor):
-    """Infer the input size from the processor configuration. Falls back to 224."""
+
+def get_hidden_size(model):
+    """Returns the hidden size dimension from the backbone's configuration. Falls back to None."""
+
+    config = model.config
+
+    d = getattr(config, "hidden_size", None)
+    if d is not None:
+        logger.debug(f"Using config.hidden_size={d}")
+        return d
+
+    d = getattr(config, "embed_dim", None)
+    if d is not None:
+        logger.debug(f"Using config.embed_dim={d}")
+        return d
+
+    d = getattr(config, "hidden_sizes", None)
+    if d is not None and isinstance(config.hidden_sizes, (list, tuple)):
+        d = config.hidden_sizes[-1]
+        logger.debug(f"Using config.hidden_sizes[-1]={d}")
+        return d
+
+    d = getattr(model, "num_features", None)
+    if d is not None:
+        logger.debug(f"Using model.num_features={d}")
+        return d
+
+    raise RuntimeError(
+        "Unable to determine hidden size for "
+        f"{model.__class__.__name__}. "
+        "You may want to extend get_hidden_size() to support this backbone."
+    )
+
+def get_image_size(processor):
+    """Returns the image size from the processor configuration. Falls back to 224."""
 
     if getattr(processor, "crop_size") is not None:
         crop_size = processor.crop_size
@@ -338,7 +372,7 @@ def main():
     processor.image_mean = image_mean
     processor.image_std = image_std
 
-    size = get_input_size(processor)
+    size = get_image_size(processor)
 
     _train_transforms = A.Compose([  # todo: p=1 for rotations --> 90 + 180 + 270 == 180 ?
         A.RandomResizedCrop(height=size, width=size, scale=(0.2, 1.0), p=1.0),
@@ -456,9 +490,6 @@ def main():
         logging_steps=10,  # Log every 10 steps
         remove_unused_columns=False,
         auto_find_batch_size=True,
-        # per_device_train_batch_size=2,   # todo: THESE ARE FOR ME, DO NOT COMMIT
-        # per_device_eval_batch_size=2,    # todo: THESE ARE FOR ME, DO NOT COMMIT
-        # gradient_accumulation_steps=16,  # todo: THESE ARE FOR ME, DO NOT COMMIT
     )
 
     trainer = CustomTrainer(

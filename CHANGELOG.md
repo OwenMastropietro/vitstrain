@@ -2,6 +2,23 @@
 
 
 
+## v0.10.0 (2026-07-22)
+
+### Feature
+
+* feat: merge pull request #15 from OwenMastropietro/feat/dinov3-model-support
+
+Add support for DINOv3 backbone models (#7) closed #7 ([`0873689`](https://github.com/mbari-org/vitstrain/commit/087368955b144e61f7700bf774575488d6eca9c2))
+
+* feat: add support for DINOv3 backbone models (#7) ([`c06e1ac`](https://github.com/mbari-org/vitstrain/commit/c06e1acc2eedff24da7cc17d1b70ff9a4215d3ba))
+
+### Unknown
+
+* replace LazyLinear with explicitly sized Linear layer
+
+Determine the classifier input dimension from backbone metadata (config.hidden_size, embed_dim, etc.) when constructing the BackboneClassifier instead of relying on lazy initialization. ([`5c5f110`](https://github.com/mbari-org/vitstrain/commit/5c5f1102e36cfd1ed01a544edd4e700793a037ee))
+
+
 ## v0.9.0 (2026-05-26)
 
 ### Feature

@@ -16,6 +16,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers import TrainingArguments, Trainer, AutoImageProcessor
 from transformers import AutoModel, AutoModelForImageClassification, TrainerCallback, EarlyStoppingCallback
+from transformers.modeling_outputs import ImageClassifierOutput
+from transformers.trainer_utils import get_last_checkpoint
 from sklearn.metrics import confusion_matrix
 from args import parse_args
 from data_utils import collate_fn, create_dataset, load_prepared_dataset
@@ -29,6 +31,80 @@ formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
 console = logging.StreamHandler()
 logger.addHandler(console)
 logger.setLevel(logging.DEBUG)
+
+class BackboneClassifier(nn.Module):
+    """Wraps a backbone-only vision model with a linear classification head."""
+
+    def __init__(self, backbone, hidden_size, num_classes, dropout=0.1):
+        super().__init__()
+        self.backbone = backbone
+        self.dropout = nn.Dropout(dropout)
+        self.classifier = nn.Linear(hidden_size, num_classes)
+
+    def forward(self, pixel_values, labels=None):
+        outputs = self.backbone(pixel_values=pixel_values)
+        features = self._extract_features(outputs)
+        features = self.dropout(features)
+        logits = self.classifier(features)
+        loss = F.cross_entropy(logits, labels) if labels is not None else None
+
+        return ImageClassifierOutput(
+            loss=loss,
+            logits=logits,
+        )
+
+    def _extract_features(self, outputs):
+        if getattr(outputs, "pooler_output") is not None:
+            return outputs.pooler_output
+
+        if getattr(outputs, "last_hidden_state") is not None:
+            hidden = outputs.last_hidden_state
+
+            if hidden.ndim == 3:
+                return hidden[:, 0]  # e.g., ViT / DINO
+
+            if hidden.ndim == 4:
+                return hidden.mean(dim=(-2, -1))  # e.g., ConvNeXt
+
+        raise RuntimeError(f"Unsupported output type: {type(outputs)}")
+
+    def freeze_backbone(self):
+        for p in self.backbone.parameters():
+            p.requires_grad = False
+
+    def unfreeze_backbone(self):
+        for p in self.backbone.parameters():
+            p.requires_grad = True
+
+
+def create_model(model_name, id2label, freeze_backbone=False):
+    """Creates a vision classifier with the specified backbone and number of labels."""
+
+    num_classes = len(id2label)
+
+    try:
+        model = AutoModelForImageClassification.from_pretrained(
+            model_name,
+            num_labels=num_classes,
+            id2label=id2label,
+            label2id={v: k for k, v in id2label.items()},
+            ignore_mismatched_sizes=True,
+        )
+
+        return model
+
+    except (ValueError, OSError) as e:
+        logger.info(f"Falling back to backbone model: {e}")
+
+    backbone = AutoModel.from_pretrained(model_name)
+    hidden_size = get_hidden_size(backbone)
+    model = BackboneClassifier(backbone, hidden_size, num_classes)
+
+    if freeze_backbone:
+        model.freeze_backbone()
+        logger.info("Backbone frozen.")
+
+    return model
 
 def compute_per_class_metrics(y_true, y_pred, y_prob, class_names, thresholds=np.arange(0.1, 0.9, 0.05)):
     """
@@ -155,6 +231,61 @@ def find_optimal_thresholds(y_true, y_prob, class_names, thresholds=np.arange(0.
 
     return optimal_thresholds
 
+
+def get_hidden_size(model):
+    """Returns the hidden size dimension from the backbone's configuration. Falls back to None."""
+
+    config = model.config
+
+    d = getattr(config, "hidden_size", None)
+    if d is not None:
+        logger.debug(f"Using config.hidden_size={d}")
+        return d
+
+    d = getattr(config, "embed_dim", None)
+    if d is not None:
+        logger.debug(f"Using config.embed_dim={d}")
+        return d
+
+    d = getattr(config, "hidden_sizes", None)
+    if d is not None and isinstance(config.hidden_sizes, (list, tuple)):
+        d = config.hidden_sizes[-1]
+        logger.debug(f"Using config.hidden_sizes[-1]={d}")
+        return d
+
+    d = getattr(model, "num_features", None)
+    if d is not None:
+        logger.debug(f"Using model.num_features={d}")
+        return d
+
+    raise RuntimeError(
+        "Unable to determine hidden size for "
+        f"{model.__class__.__name__}. "
+        "You may want to extend get_hidden_size() to support this backbone."
+    )
+
+def get_image_size(processor):
+    """Returns the image size from the processor configuration. Falls back to 224."""
+
+    if getattr(processor, "crop_size") is not None:
+        crop_size = processor.crop_size
+        if isinstance(crop_size, dict):
+            return crop_size["height"]
+        return crop_size
+
+    if getattr(processor, "size") is not None:
+        size = processor.size
+        if isinstance(size, dict):
+            if "height" in size:
+                return size["height"]
+            if "shortest_edge" in size:
+                return size["shortest_edge"]
+        return size
+
+    logger.error("No crop size found in processor. Using default size of 224.")
+
+    return 224
+
 # Main function
 def main():
     args = parse_args()
@@ -172,6 +303,7 @@ def main():
     num_epochs = args.num_epochs
     early_stopping_epochs = args.early_stopping_epochs
     min_images_per_class = args.min_images_per_class
+    # todo: add freeze_backbone as cli flag (default currently False)
 
     # Append timestamp to the model name
     now = datetime.now()
@@ -228,66 +360,50 @@ def main():
             split_json_path=split_json_path,
         )
 
-    # The id2label and label2id are used to convert the labels to and from the model's internal representation
-    # These are stored in the HuggingFace config.json file with the model, e.g. mbari-uav-vit-b-16/config.json
-    model = AutoModelForImageClassification.from_pretrained(base_model,
-                                                             num_labels=len(label2id.keys()),
-                                                             id2label=id2label,
-                                                             label2id=label2id,
-                                                             ignore_mismatched_sizes=True,
-                                                             )
-
     train_ds = ds_splits['train']
-    val_ds = ds_splits['valid']
-    test_ds = ds_splits['test']
+    val_ds   = ds_splits['valid']
+    test_ds  = ds_splits['test']
 
-    # Image processor and transforms - these differ for each model
+    # Create Model.
+    model = create_model(base_model, id2label)
+
+    # Configure Preprocessing.
     processor = AutoImageProcessor.from_pretrained(base_model, use_fast=True)
-
-    if hasattr(processor, "crop_size") and processor.crop_size is not None:
-        size = processor.crop_size["height"]
-    elif hasattr(processor, "size") and processor.size is not None:
-        size = processor.size["height"]
-    else:
-        logger.error(f"No crop size found in processor. Using default size of 224.")
-        size = 224
-
     processor.image_mean = image_mean
     processor.image_std = image_std
 
-    # Training transforms
-    if add_rotations:
-        _train_transforms = A.Compose(
-            [
-                A.RandomResizedCrop(height=size, width=size, scale=(0.2, 1.0), p=1.0),
-                A.Rotate(limit=90, interpolation=1, border_mode=4, value=None, p=1),
-                A.Rotate(limit=180, interpolation=1, border_mode=4, value=None, p=1),
-                A.Rotate(limit=270, interpolation=1, border_mode=4, value=None, p=1),
-                A.GaussianBlur(blur_limit=(3, 7), sigma_limit=0.1, p=0.5),
-                A.Normalize(mean=image_mean, std=image_std),
-                ToTensorV2(),
-            ]
-        )
-    else:
-        _train_transforms = A.Compose(
-            [
-                A.RandomResizedCrop(height=size, width=size, scale=(0.2, 1.0), p=1.0),
-                A.GaussianBlur(blur_limit=(3, 7), sigma_limit=0.1, p=0.5),
-                A.Normalize(mean=image_mean, std=image_std),
-                ToTensorV2(),
-            ]
-        )
+    size = get_image_size(processor)
 
-    # Validation transforms
-    _val_transforms = A.Compose(
-        [
-            A.RandomResizedCrop(height=size, width=size, scale=(0.2, 1.0), p=1.0),
-            A.Normalize(mean=image_mean, std=image_std),
-            ToTensorV2(),
-        ]
-    )
+    _train_transforms = A.Compose([  # todo: p=1 for rotations --> 90 + 180 + 270 == 180 ?
+        A.RandomResizedCrop(height=size, width=size, scale=(0.2, 1.0), p=1.0),
+        *([A.Rotate(limit=90,  interpolation=1, border_mode=4, value=None, p=1)] if add_rotations else []),
+        *([A.Rotate(limit=180, interpolation=1, border_mode=4, value=None, p=1)] if add_rotations else []),
+        *([A.Rotate(limit=270, interpolation=1, border_mode=4, value=None, p=1)] if add_rotations else []),
+        A.GaussianBlur(blur_limit=(3, 7), sigma_limit=0.1, p=0.5),
+        A.Normalize(mean=image_mean, std=image_std),
+        ToTensorV2(),
+    ])
 
-    # Custom Focal Loss to handle class imbalance
+    _val_transforms = A.Compose([  # todo: fix randomness in validation ?
+        A.RandomResizedCrop(height=size, width=size, scale=(0.2, 1.0), p=1.0),
+        A.Normalize(mean=image_mean, std=image_std),
+        ToTensorV2(),
+    ])
+
+    def train_transforms(examples):
+        examples["pixel_values"] = [_train_transforms(image=np.array(i))["image"] for i in examples["image"]]
+        return examples
+
+    def val_transforms(examples):
+        examples["pixel_values"] = [_val_transforms(image=np.array(i))["image"] for i in examples["image"]]
+        return examples
+
+    train_ds.set_transform(train_transforms)
+    val_ds.set_transform(val_transforms)
+    test_ds.set_transform(val_transforms)
+
+    # Train Model.
+
     class FocalLoss(nn.Module):
         def __init__(self, alpha=0.75, gamma=2, reduction='mean'):
             super(FocalLoss, self).__init__()
@@ -313,26 +429,13 @@ def main():
             super().__init__(*args, **kwargs)
             self.focal_loss = FocalLoss()
 
-        # Adding **kwargs because I got TypeError: main.<locals>.CustomTrainer.
-        # compute_loss() got an unexpected keyword argument 'num_items_in_batch'
-        def compute_loss(self, model, inputs, return_outputs=False):
+        def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
             labels = inputs.pop("labels")
             outputs = model(**inputs)
             logits = outputs.logits
+            loss = self.focal_loss(logits, labels)
 
-            loss = self.focal_loss.forward(logits, labels)
             return (loss, outputs) if return_outputs else loss
-
-
-    def train_transforms(examples):
-        examples["pixel_values"] = [_train_transforms(image=np.array(i))["image"] for i in examples["image"]]
-        return examples
-
-
-    def val_transforms(examples):
-        examples["pixel_values"] = [_val_transforms(image=np.array(i))["image"] for i in examples["image"]]
-        return examples
-
 
     class LossLoggerCallback(TrainerCallback):
         def __init__(self, save_path="loss_history.json"):
@@ -364,11 +467,13 @@ def main():
                     self.loss_history["eval_loss"].append(logs["eval_loss"])
                 self._save_history()
 
+    def compute_metrics(eval_pred):
+        predictions, labels = eval_pred
+        predictions = np.argmax(predictions, axis=1)
+        return dict(accuracy=accuracy_score(predictions, labels))
 
-    # Set the transforms
-    train_ds.set_transform(train_transforms)
-    val_ds.set_transform(val_transforms)
-    test_ds.set_transform(val_transforms)
+    loss_logger = LossLoggerCallback(save_path=loss_history_file)
+    early_stopping = EarlyStoppingCallback(early_stopping_patience=early_stopping_epochs)
 
     train_args = TrainingArguments(
         model_name,
@@ -387,16 +492,6 @@ def main():
         auto_find_batch_size=True,
     )
 
-
-    def compute_metrics(eval_pred):
-        predictions, labels = eval_pred
-        predictions = np.argmax(predictions, axis=1)
-        return dict(accuracy=accuracy_score(predictions, labels))
-
-
-    loss_logger = LossLoggerCallback(save_path=loss_history_file)
-    early_stopping = EarlyStoppingCallback(early_stopping_patience=early_stopping_epochs)
-
     trainer = CustomTrainer(
         model=model,
         args=train_args,
@@ -404,16 +499,12 @@ def main():
         eval_dataset=val_ds,
         data_collator=collate_fn,
         compute_metrics=compute_metrics,
-        tokenizer=processor,
+        processing_class=processor,
         callbacks=[loss_logger, early_stopping],
     )
 
-    # Train the model and save it. This will save the model to a directory of the same name
-    # If checkpoints exist, load the best model from the checkpoint
-    if Path(model_name).exists() and len(list(Path(model_name).rglob('*.safetensors'))) > 0:
-        trainer.train(resume_from_checkpoint=True)
-    else:
-        trainer.train()
+    checkpoint = get_last_checkpoint(model_name)
+    trainer.train(resume_from_checkpoint=checkpoint)
     trainer.save_model(model_name)
 
     # Run predictions on the test and val datasets

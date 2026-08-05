@@ -123,10 +123,11 @@ def compute_per_class_metrics(y_true, y_pred, y_prob, class_names, thresholds=np
         list[dict]: Per-class evaluation metrics.
     """
 
-    # Standard Multiclass Metrics.
+    # Standard Multiclass Metrics. Classes absent from both y_true and y_pred still get a row.
     report = classification_report(
         y_true,
         y_pred,
+        labels=list(range(len(class_names))),
         target_names=class_names,
         output_dict=True,
         zero_division=0,
@@ -563,8 +564,9 @@ def main():
     all_labels = id2label.values()
     cm = confusion_matrix(y_true, y_pred, labels=range(len(all_labels)))
 
-    # Normalize the confusion matrix to range 0-1
-    cm_normalized = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+    # Normalize the confusion matrix to range 0-1, leaving rows with no test samples at 0
+    row_totals = cm.sum(axis=1)[:, np.newaxis]
+    cm_normalized = np.divide(cm.astype('float'), row_totals, out=np.zeros(cm.shape), where=row_totals != 0)
 
     plt.figure(figsize=(12, 12))
     sns.heatmap(cm_normalized, xticklabels=all_labels, yticklabels=all_labels, cmap='Blues')

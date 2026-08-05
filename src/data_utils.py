@@ -38,6 +38,28 @@ def _image_value_to_relpath(image_value, dataset_root: Path) -> str:
         return image_path.as_posix()
 
 
+def build_label_maps(logger: Logger, ds: DatasetDict, combined_stats: Dict[str, int]):
+    """Build id2label/label2id from the class ordering the imagefolder loader assigned.
+
+    The integer labels in the dataset come from the directories on disk, so deriving the maps
+    from stats.json instead shifts every id whenever the two disagree.
+    """
+    class_names = list(ds["train"].features["label"].names)
+
+    stats_only = sorted(set(combined_stats) - set(class_names))
+    disk_only = sorted(set(class_names) - set(combined_stats))
+    if stats_only or disk_only:
+        logger.warning(
+            f"stats.json ({len(combined_stats)} labels) and the dataset directories "
+            f"({len(class_names)} labels) disagree; using the directory ordering. "
+            f"In stats.json only: {stats_only}. On disk only: {disk_only}."
+        )
+
+    id2label = {id: label for id, label in enumerate(class_names)}
+    label2id = {label: id for id, label in id2label.items()}
+    return id2label, label2id
+
+
 def collate_fn(examples):
     pixel_values = torch.stack([example["pixel_values"] for example in examples])
     labels = torch.tensor([example["label"] for example in examples])
@@ -115,7 +137,7 @@ def create_dataset(logger: Logger, remove_long_tail: bool, raw_dataset_paths: Li
         if remap_class is not None:
             if label in remap_class.keys():
                 final_label = remap_class[label]
-        correct_stats[final_label] = 0
+        correct_stats.setdefault(final_label, 0)
         for path in raw_dataset_paths:
             class_path = path / str(label)
             images.extend(list(class_path.glob('*.jpg')))
@@ -126,7 +148,15 @@ def create_dataset(logger: Logger, remove_long_tail: bool, raw_dataset_paths: Li
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(image, dest)
             correct_stats[final_label] += 1
-    combined_stats = correct_stats
+
+    # Labels with no images on disk get no directory, so they must not end up in the label maps
+    empty_labels = sorted(label for label, count in correct_stats.items() if count == 0)
+    if empty_labels:
+        logger.warning(
+            f"Dropping {len(empty_labels)} label(s) listed in stats.json with no .jpg/.png images "
+            f"in the raw data: {empty_labels}"
+        )
+    combined_stats = {label: count for label, count in correct_stats.items() if count > 0}
 
     deleted_labels = {}
     if remove_long_tail:
@@ -245,8 +275,7 @@ def create_dataset(logger: Logger, remove_long_tail: bool, raw_dataset_paths: Li
 
     # Create label mappings, id2label and label2id from the dataset
     logger.info(f"Creating label maps and computing statistics")
-    id2label = {id: label for id, label in enumerate(sorted(combined_stats.keys()))}
-    label2id = {label: id for id, label in id2label.items()}
+    id2label, label2id = build_label_maps(logger, ds, combined_stats)
     logger.info(label2id)
     logger.info(id2label)
 
@@ -352,8 +381,7 @@ def load_prepared_dataset(
         combined_stats = json.load(f)
 
     logger.info("Creating label maps and computing statistics")
-    id2label = {id: label for id, label in enumerate(sorted(combined_stats.keys()))}
-    label2id = {label: id for id, label in id2label.items()}
+    id2label, label2id = build_label_maps(logger, ds, combined_stats)
 
     mean, std = compute_mean_std(ds_splits["train"])
 

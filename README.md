@@ -84,7 +84,23 @@ python src/fine_tune_vits.py \
 
 `--filter-data` must point to a previously prepared dataset directory.
 
-Example output:
+To also export the trained model to ONNX, add `--export-onnx`:
+
+```bash
+python src/fine_tune_vits.py \
+        --raw-data $PWD/data/crops \
+        --base-model google/vit-base-patch16-224-in21k \
+        --model-name catsdogs-vit-b16 \
+        --num-epochs 5 \
+        --export-onnx
+```
+
+This writes `model.onnx` into the model output directory. The graph takes a `pixel_values`
+input at the resolution the model was trained at, with a dynamic batch dimension, and returns
+`logits`. After exporting, the outputs are compared against PyTorch and the difference is
+reported in the training log.
+
+Example output (`model.onnx` only when `--export-onnx` is used):
 ```text
 catsdogs-vit-b16-20250828
 ├── all_results.json
@@ -101,7 +117,10 @@ catsdogs-vit-b16-20250828
 ├── confusion_matrix_catsdogs-vit-b16-20250828_2025-08-28_144843.png
 ├── eval_results.json
 ├── loss_curve_catsdogs-vit-b16-20250828_2025-08-28_144843.png
+├── model.onnx
 ├── model.safetensors
+├── optimal_thresholds_catsdogs-vit-b16-20250828_20250828_144843.csv
+├── per_class_metrics.csv
 ├── pr_curves_catsdogs-vit-b16-20250828_2025-08-28_144843.png
 ├── preprocessor_config.json
 └── training_args.bin
@@ -138,4 +157,4 @@ python src/fine_tune_vit.py \
 ![docs/imgs/loss_curve.png](./docs/imgs/loss_curve.png)
 ![docs/imgs/pr_curves.png](./docs/imgs/pr_curves.png)
 
-last updated: 2025-08-28
+last updated: 2026-08-05

@@ -4,6 +4,8 @@
 import re
 from logging import Logger
 
+import numpy as np
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import AutoConfig, AutoModel, AutoModelForImageClassification, MODEL_MAPPING, PreTrainedModel
@@ -148,6 +150,61 @@ def create_model(logger: Logger, model_name, id2label, freeze_backbone=False, dr
         logger.info("Backbone frozen.")
 
     return model
+
+
+class LogitsOnly(nn.Module):
+    """ONNX has no equivalent of ImageClassifierOutput, so expose the logits tensor directly."""
+
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, pixel_values):
+        return self.model(pixel_values=pixel_values).logits
+
+
+def export_onnx(logger: Logger, model, onnx_path, image_size, opset_version=17):
+    """Exports a trained classifier to ONNX and checks it against the PyTorch outputs.
+
+    eval() matters for more than dropout here: DINOv3 randomizes its rotary position
+    embeddings while training, which would otherwise be traced into the graph.
+    """
+
+    import onnxruntime as ort
+
+    was_training = model.training
+    wrapped = LogitsOnly(model).eval()
+
+    device = next(model.parameters()).device
+    dummy = torch.randn(1, 3, image_size, image_size, device=device)
+
+    logger.info(f"Exporting to ONNX with input 1x3x{image_size}x{image_size}, opset {opset_version}")
+    torch.onnx.export(
+        wrapped,
+        (dummy,),
+        onnx_path.as_posix(),
+        input_names=["pixel_values"],
+        output_names=["logits"],
+        dynamic_axes={"pixel_values": {0: "batch_size"}, "logits": {0: "batch_size"}},
+        opset_version=opset_version,
+    )
+
+    with torch.inference_mode():
+        expected = wrapped(dummy).cpu().numpy()
+
+    session = ort.InferenceSession(onnx_path.as_posix(), providers=["CPUExecutionProvider"])
+    actual = session.run(None, {"pixel_values": dummy.cpu().numpy()})[0]
+    max_diff = float(np.abs(actual - expected).max())
+
+    if max_diff > 1e-4:
+        logger.warning(f"ONNX outputs differ from PyTorch by {max_diff:.2e}; check {onnx_path.name}")
+    else:
+        logger.info(f"ONNX model saved to {onnx_path.name} (max difference from PyTorch {max_diff:.2e})")
+
+    # torch.onnx.export restores the mode of the module it was handed, which is the wrapper.
+    model.train(was_training)
+
+    return onnx_path
 
 
 def load_model(logger: Logger, model_dir):

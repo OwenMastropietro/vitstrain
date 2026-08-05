@@ -20,7 +20,7 @@ from transformers.trainer_utils import get_last_checkpoint
 from sklearn.metrics import confusion_matrix
 from args import parse_args
 from data_utils import collate_fn, create_dataset, load_prepared_dataset
-from model_factory import create_model
+from model_factory import create_model, export_onnx
 from plot_utils import plot_multiclass_pr_curves
 from version import __version__
 import matplotlib.pyplot as plt
@@ -198,6 +198,7 @@ def main():
     num_epochs = args.num_epochs
     early_stopping_epochs = args.early_stopping_epochs
     min_images_per_class = args.min_images_per_class
+    export_to_onnx = args.export_onnx
     # todo: add freeze_backbone as cli flag (default currently False)
 
     # Append timestamp to the model name
@@ -225,6 +226,7 @@ def main():
     logger.info(f"Split JSON path: {split_json_path}")
     logger.info(f"Remap classes: {remap}")
     logger.info(f"Train only (skip data prep): {train_only}")
+    logger.info(f"Export to ONNX: {export_to_onnx}")
     logger.info(f"Loss history file: {loss_history_file}")
     logger.info("==========================================================================")
     logger.info(f"Remove the loss history file and filtered data path if you want to restart training, e.g. rm {loss_history_file} && rm -rf {filter_data}")
@@ -401,6 +403,9 @@ def main():
     checkpoint = get_last_checkpoint(model_name)
     trainer.train(resume_from_checkpoint=checkpoint)
     trainer.save_model(model_name)
+
+    if export_to_onnx:
+        export_onnx(logger, trainer.model, Path(model_name) / "model.onnx", size)
 
     # Run predictions on the test and val datasets
     metrics = trainer.evaluate(val_ds)

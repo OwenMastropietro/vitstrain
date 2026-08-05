@@ -75,6 +75,11 @@ def parse_args():
         help="Number of epochs to wait for early stopping.",
     )
     parser.add_argument(
+        "--export-onnx",
+        action="store_true",
+        help="Export the trained model to ONNX in the model output directory.",
+    )
+    parser.add_argument(
         "--exclude-labels",
         type=str,
         nargs="+",

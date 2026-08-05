@@ -2,6 +2,32 @@
 
 
 
+## v0.10.1 (2026-08-05)
+
+### Fix
+
+* fix: Merge pull request #17 from mbari-org/cursor/fix-label-map-mismatch
+
+Derive id2label/label2id from the imagefolder class ordering instead of stats.json keys, so labels listed in stats with no images on disk cannot shift every class id. Drop such zero-image labels during data prep and accumulate remapped counts instead of resetting them.
+
+Also pass explicit labels to classification_report and guard the confusion matrix normalization so classes absent from the test split report zeros rather than raising. ([`7661d91`](https://github.com/mbari-org/vitstrain/commit/7661d91f94ebd556af39ac1f4edbbb36650d70f2))
+
+### Unknown
+
+* Fix class label map mismatch with dataset directories
+
+Derive id2label/label2id from the imagefolder class ordering instead of
+stats.json keys, so labels listed in stats with no images on disk cannot
+shift every class id. Drop such zero-image labels during data prep and
+accumulate remapped counts instead of resetting them.
+
+Also pass explicit labels to classification_report and guard the
+confusion matrix normalization so classes absent from the test split
+report zeros rather than raising.
+
+Co-authored-by: Cursor &lt;cursoragent@cursor.com&gt; ([`f9891c9`](https://github.com/mbari-org/vitstrain/commit/f9891c94140809badde21a7ed9b11f54f77ec197))
+
+
 ## v0.10.0 (2026-07-22)
 
 ### Feature

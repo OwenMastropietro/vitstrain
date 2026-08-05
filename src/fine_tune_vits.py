@@ -15,12 +15,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import TrainingArguments, Trainer, AutoImageProcessor
-from transformers import AutoModel, AutoModelForImageClassification, TrainerCallback, EarlyStoppingCallback
-from transformers.modeling_outputs import ImageClassifierOutput
+from transformers import TrainerCallback, EarlyStoppingCallback
 from transformers.trainer_utils import get_last_checkpoint
 from sklearn.metrics import confusion_matrix
 from args import parse_args
 from data_utils import collate_fn, create_dataset, load_prepared_dataset
+from model_factory import create_model
 from plot_utils import plot_multiclass_pr_curves
 from version import __version__
 import matplotlib.pyplot as plt
@@ -31,80 +31,6 @@ formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
 console = logging.StreamHandler()
 logger.addHandler(console)
 logger.setLevel(logging.DEBUG)
-
-class BackboneClassifier(nn.Module):
-    """Wraps a backbone-only vision model with a linear classification head."""
-
-    def __init__(self, backbone, hidden_size, num_classes, dropout=0.1):
-        super().__init__()
-        self.backbone = backbone
-        self.dropout = nn.Dropout(dropout)
-        self.classifier = nn.Linear(hidden_size, num_classes)
-
-    def forward(self, pixel_values, labels=None):
-        outputs = self.backbone(pixel_values=pixel_values)
-        features = self._extract_features(outputs)
-        features = self.dropout(features)
-        logits = self.classifier(features)
-        loss = F.cross_entropy(logits, labels) if labels is not None else None
-
-        return ImageClassifierOutput(
-            loss=loss,
-            logits=logits,
-        )
-
-    def _extract_features(self, outputs):
-        if getattr(outputs, "pooler_output") is not None:
-            return outputs.pooler_output
-
-        if getattr(outputs, "last_hidden_state") is not None:
-            hidden = outputs.last_hidden_state
-
-            if hidden.ndim == 3:
-                return hidden[:, 0]  # e.g., ViT / DINO
-
-            if hidden.ndim == 4:
-                return hidden.mean(dim=(-2, -1))  # e.g., ConvNeXt
-
-        raise RuntimeError(f"Unsupported output type: {type(outputs)}")
-
-    def freeze_backbone(self):
-        for p in self.backbone.parameters():
-            p.requires_grad = False
-
-    def unfreeze_backbone(self):
-        for p in self.backbone.parameters():
-            p.requires_grad = True
-
-
-def create_model(model_name, id2label, freeze_backbone=False):
-    """Creates a vision classifier with the specified backbone and number of labels."""
-
-    num_classes = len(id2label)
-
-    try:
-        model = AutoModelForImageClassification.from_pretrained(
-            model_name,
-            num_labels=num_classes,
-            id2label=id2label,
-            label2id={v: k for k, v in id2label.items()},
-            ignore_mismatched_sizes=True,
-        )
-
-        return model
-
-    except (ValueError, OSError) as e:
-        logger.info(f"Falling back to backbone model: {e}")
-
-    backbone = AutoModel.from_pretrained(model_name)
-    hidden_size = get_hidden_size(backbone)
-    model = BackboneClassifier(backbone, hidden_size, num_classes)
-
-    if freeze_backbone:
-        model.freeze_backbone()
-        logger.info("Backbone frozen.")
-
-    return model
 
 def compute_per_class_metrics(y_true, y_pred, y_prob, class_names, thresholds=np.arange(0.1, 0.9, 0.05)):
     """
@@ -233,38 +159,6 @@ def find_optimal_thresholds(y_true, y_prob, class_names, thresholds=np.arange(0.
     return optimal_thresholds
 
 
-def get_hidden_size(model):
-    """Returns the hidden size dimension from the backbone's configuration. Falls back to None."""
-
-    config = model.config
-
-    d = getattr(config, "hidden_size", None)
-    if d is not None:
-        logger.debug(f"Using config.hidden_size={d}")
-        return d
-
-    d = getattr(config, "embed_dim", None)
-    if d is not None:
-        logger.debug(f"Using config.embed_dim={d}")
-        return d
-
-    d = getattr(config, "hidden_sizes", None)
-    if d is not None and isinstance(config.hidden_sizes, (list, tuple)):
-        d = config.hidden_sizes[-1]
-        logger.debug(f"Using config.hidden_sizes[-1]={d}")
-        return d
-
-    d = getattr(model, "num_features", None)
-    if d is not None:
-        logger.debug(f"Using model.num_features={d}")
-        return d
-
-    raise RuntimeError(
-        "Unable to determine hidden size for "
-        f"{model.__class__.__name__}. "
-        "You may want to extend get_hidden_size() to support this backbone."
-    )
-
 def get_image_size(processor):
     """Returns the image size from the processor configuration. Falls back to 224."""
 
@@ -366,7 +260,7 @@ def main():
     test_ds  = ds_splits['test']
 
     # Create Model.
-    model = create_model(base_model, id2label)
+    model = create_model(logger, base_model, id2label)
 
     # Configure Preprocessing.
     processor = AutoImageProcessor.from_pretrained(base_model, use_fast=True)

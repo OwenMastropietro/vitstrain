@@ -2,12 +2,16 @@
 # Filename: src/infer.py
 # Description: Simple example on using a fine-tuned a Vision Transformer model with a HuggingFace Model
 
-from transformers import AutoModelForImageClassification, AutoImageProcessor
+import logging
+
+from transformers import AutoImageProcessor
 from PIL import Image
 import torch
 
+from model_factory import load_model
+
 model_name='mbari-uav-vit-b-16'
-model = AutoModelForImageClassification.from_pretrained(model_name)
+model = load_model(logging.getLogger(__name__), model_name)
 model.to("cuda")
 processor = AutoImageProcessor.from_pretrained(model_name)
 image_paths = ["/tmp/plane_cifar10.png"]

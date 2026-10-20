@@ -2,6 +2,51 @@
 
 
 
+## v0.11.0 (2026-10-20)
+
+### Build
+
+* build: add onnx and onnxruntime
+
+Supports exporting fine-tuned models to ONNX. onnx requires
+typing_extensions&gt;=4.15.0, so bump that pin from 4.12.2.
+
+Co-authored-by: Cursor &lt;cursoragent@cursor.com&gt; ([`6bdc2f8`](https://github.com/mbari-org/vitstrain/commit/6bdc2f855f8c5189a6ce7b220b39b458af203878))
+
+### Feature
+
+* feat: adding more models to the training options ([`b426066`](https://github.com/mbari-org/vitstrain/commit/b426066e3e709e109e140316342b7685f3b95c21))
+
+* feat: Merge pull request #19 from mbari-org/cursor/dinov3-checkpoint-config
+
+This creates a DINOv3 config.json consistent with the previous model outputs and adds ONNX export; both are used downstream in production pipelines.  DINOv3 onnx export did not work with the optimum library, so adding it here is a workaround. ([`10c0110`](https://github.com/mbari-org/vitstrain/commit/10c0110995911e26619bdc0ee7ba8ae816c59a3b))
+
+* feat: add --export-onnx to export the trained model
+
+Writes model.onnx to the model output directory after training, with a
+dynamic batch dimension, and verifies the graph against PyTorch. Also
+brings the README example output tree back in line with what a run
+produces.
+
+Co-authored-by: Cursor &lt;cursoragent@cursor.com&gt; ([`c95ffc2`](https://github.com/mbari-org/vitstrain/commit/c95ffc2a3d3fbba3695cbef5873e47f056d31714))
+
+### Fix
+
+* fix: write config.json for DINOv3 checkpoints
+
+Backbones without a transformers classification head (DINOv3) fell back to a
+plain nn.Module wrapper, so Trainer saved only a state dict. The resulting
+model directory had no config.json and no label map, and could not be loaded
+by AutoModel.
+
+Build the fallback wrapper as a PreTrainedModel that reuses the backbone&#39;s own
+config and stores the backbone under its base_model_prefix, so the checkpoint
+matches what the ViT path already produces. Move model construction into
+model_factory.py and add load_model() so inference can rebuild the head.
+
+Co-authored-by: Cursor &lt;cursoragent@cursor.com&gt; ([`c6dbabb`](https://github.com/mbari-org/vitstrain/commit/c6dbabbf52477d1446c5d9bc6cffab510c5c157b))
+
+
 ## v0.10.1 (2026-08-05)
 
 ### Fix

@@ -7,6 +7,48 @@ from pathlib import Path
 
 DATA_PATH = Path(__file__).parent.parent / "data"
 
+# Short aliases for base models known to work with this pipeline. Pass either
+# an alias (e.g. "dinov3-vits16") or the full Hugging Face model id
+# (e.g. "facebook/dino-vits8") to --base-model.
+MODEL_PRESETS = {
+    "vit-b16": "google/vit-base-patch16-224",
+    "vit-b16-in21k": "google/vit-base-patch16-224-in21k",
+    "clip-vit-b32": "openai/clip-vit-base-patch32",
+    "dino-vits8": "facebook/dino-vits8",
+    "dino-vits16": "facebook/dino-vits16",
+    "dino-vitb8": "facebook/dino-vitb8",
+    "dino-vitb16": "facebook/dino-vitb16",
+    "dinov3-vits16": "facebook/dinov3-vits16-pretrain-lvd1689m",
+    "dinov3-convnext-small": "facebook/dinov3-convnext-small-pretrain-lvd1689m",
+    "dinov3-convnext-base": "facebook/dinov3-convnext-base-pretrain-lvd1689m",
+    "convnextv2-tiny": "facebook/convnextv2-tiny-22k-224",
+    "convnextv2-base": "facebook/convnextv2-base-22k-224",
+    "efficientnet-b0": "google/efficientnet-b0",
+    "efficientnet-b1": "google/efficientnet-b1",
+    "efficientnet-b2": "google/efficientnet-b2",
+    "efficientnet-b3": "google/efficientnet-b3",
+    "efficientnet-b4": "google/efficientnet-b4",
+    "deit-base": "facebook/deit-base-patch16-224",
+    "swin-tiny": "microsoft/swin-tiny-patch4-window7-224",
+}
+
+
+def resolve_base_model(name):
+    """Resolves a --base-model value, expanding known aliases to their full Hugging Face model id."""
+    return MODEL_PRESETS.get(name, name)
+
+
+def str2bool(value):
+    """argparse type= helper for proper boolean parsing (unlike bare `type=bool`, which treats any non-empty string, including "False", as True)."""
+    if isinstance(value, bool):
+        return value
+    if value.lower() in ("true", "1", "yes"):
+        return True
+    if value.lower() in ("false", "0", "no"):
+        return False
+    raise argparse.ArgumentTypeError(f"Expected a boolean value (True/False), got {value!r}")
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Train an image classification Vision Transformer (ViTS) model.")
     parser.add_argument(
@@ -38,10 +80,20 @@ def parse_args():
         help="Name of the model you want to train.",
     )
     parser.add_argument(
+        "--list-models",
+        action="store_true",
+        help="Print the available --base-model aliases and exit.",
+    )
+    parser.add_argument(
         "--base-model",
         type=str,
         default="google/vit-base-patch16-224",
-        help="Name of the base model to fine-tune from, e.g. google/vit-base-patch16-224 or facebook/dino-vitb8.",
+        help=(
+            "Base model to fine-tune from. Accepts either a short alias "
+            f"({', '.join(sorted(MODEL_PRESETS))}) or any Hugging Face model id, "
+            "e.g. google/vit-base-patch16-224 or facebook/dino-vitb8. "
+            "Run with --list-models to see aliases and their full ids."
+        ),
     )
     parser.add_argument(
         "--raw-data",
@@ -86,4 +138,13 @@ def parse_args():
         default=None,
         help="Labels to exclude from training (space-separated if multiple labels).",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    if args.list_models:
+        print("Available --base-model aliases:")
+        for alias, model_id in sorted(MODEL_PRESETS.items()):
+            print(f"  {alias:<24} {model_id}")
+        raise SystemExit(0)
+
+    args.base_model = resolve_base_model(args.base_model)
+    return args
